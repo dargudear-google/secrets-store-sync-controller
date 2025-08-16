@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/secrets-store-csi-driver/provider/v1alpha1"
 
 	secretsyncv1alpha1 "sigs.k8s.io/secrets-store-sync-controller/api/v1alpha1"
+	"sigs.k8s.io/secrets-store-sync-controller/internal/controller/mocks"
 	"sigs.k8s.io/secrets-store-sync-controller/pkg/k8s"
 	"sigs.k8s.io/secrets-store-sync-controller/pkg/provider"
 )
@@ -430,8 +431,11 @@ func TestReconcile(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			reporter := mocks.NewFakeReporter()
 			testSecretSyncReconciler := newSecretSyncReconciler(t, scheme, test.secretProviderClassToProcess, test.secretSyncToProcess, test.secret)
+			testSecretSyncReconciler.secretSyncReconciler.MetricReporter = reporter
 
+			c, cErr := reporter.ReportSyncK8SecretCtMetricInvoked(), reporter.ReportSyncK8SecretErrCtMetricInvoked()
 			// Mock request to simulate Reconcile being called
 			req := ctrl.Request{
 				NamespacedName: types.NamespacedName{
@@ -445,8 +449,19 @@ func TestReconcile(t *testing.T) {
 				if err == nil || err.Error() != test.expectedErrorString {
 					t.Fatalf("expected error %q, got %q", test.expectedErrorString, err)
 				}
-			} else if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+				// If error is expected the error count and total operations should be increased.
+				if reporter.ReportSyncK8SecretErrCtMetricInvoked() <= cErr ||
+					reporter.ReportSyncK8SecretCtMetricInvoked() <= c {
+					t.Fatalf("expected `secret_sync_reconciliation` and `secret_sync_reconciliation_error` to be increased, but it was not")
+				}
+			} else {
+				// if it is successful reconciliation both the  counter should go up.
+				if reporter.ReportSyncK8SecretCtMetricInvoked() <= c {
+					t.Fatalf("expected `secret_sync_reconciliation` to be increased, but it was not")
+				}
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
 			}
 
 			// validate status condition
@@ -634,6 +649,7 @@ func newSecretSyncReconciler(
 	providerClients := provider.NewPluginClientBuilder([]string{socketPath})
 
 	// Create a ReconcileSecretSync object with the scheme and fake client
+	reporter := mocks.NewFakeReporter()
 	kubeClient := fakeclient.NewSimpleClientset(testSecret)
 	ssc := &SecretSyncReconciler{
 		Client:          ctrlClient,
@@ -641,6 +657,7 @@ func newSecretSyncReconciler(
 		Scheme:          scheme,
 		TokenClient:     k8s.NewTokenClient(kubeClient),
 		ProviderClients: providerClients,
+		MetricReporter:  reporter,
 	}
 
 	return &testSecretSyncReconciler{

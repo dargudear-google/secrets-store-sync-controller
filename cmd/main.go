@@ -37,6 +37,7 @@ import (
 	secretsyncv1alpha1 "sigs.k8s.io/secrets-store-sync-controller/api/v1alpha1"
 	"sigs.k8s.io/secrets-store-sync-controller/internal/controller"
 	"sigs.k8s.io/secrets-store-sync-controller/pkg/k8s"
+	"sigs.k8s.io/secrets-store-sync-controller/pkg/metrics"
 	"sigs.k8s.io/secrets-store-sync-controller/pkg/provider"
 	"sigs.k8s.io/secrets-store-sync-controller/pkg/version"
 	//+kubebuilder:scaffold:imports
@@ -82,6 +83,12 @@ func runMain() error {
 		return nil
 	}
 
+	err := metrics.InitMetricsExporter()
+	if err != nil {
+		setupLog.Error(err, "failed to initialize metrics exporter")
+		return err
+	}
+
 	controllerConfig := ctrl.GetConfigOrDie()
 	controllerConfig.UserAgent = version.GetUserAgent("secrets-store-sync-controller")
 	mgr, err := ctrl.NewManager(controllerConfig, ctrl.Options{
@@ -116,6 +123,12 @@ func runMain() error {
 		audiences = []string{}
 	}
 
+	sr, err := controller.NewStatsReporter()
+	if err != nil {
+		setupLog.Error(err, "failed to initialize stats reporter")
+		return err
+	}
+
 	if err = (&controller.SecretSyncReconciler{
 		Clientset:       kubeClient,
 		Client:          mgr.GetClient(),
@@ -123,6 +136,7 @@ func runMain() error {
 		TokenClient:     tokenClient,
 		ProviderClients: providerClients,
 		Audiences:       audiences,
+		MetricReporter:  sr,
 		EventRecorder:   record.NewBroadcaster().NewRecorder(scheme, corev1.EventSource{Component: "secret-sync-controller"}),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SecretSync")
